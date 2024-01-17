@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "numpyrotils"
+readme = "README.md"
+license = { text = "Apache License, Version 2.0" }
+dynamic = ["version"]
+description = "A collection of utils for numpyro"
+authors = [{ name = "Renat Sibgatulin", email = "sibgatulin@tuta.io" }]
+requires-python = ">=3.9"
+dependencies = ["flax", "funsor", "numpyro", "optax", "tqdm"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+wandb = ["wandb"]
+
+[tool.setuptools]
+packages = ["numpyrotils"]
+
+[tool.setuptools.dynamic]
+version = { attr = "numpyrotils.__version__" }
