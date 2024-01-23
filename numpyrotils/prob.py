@@ -11,6 +11,7 @@ from numpyro.infer.autoguide import AutoDelta
 from numpyro.infer.svi import SVIRunResult
 from numpyro.optim import Adam
 from tqdm import trange
+from numpyrotils.optimiser import generate_optimiser, ScalarOrScheduleOrSpec
 
 __all__ = ["run_with_callbacks", "svi"]
 
@@ -108,7 +109,7 @@ def svi(
     model,
     guide=None,
     num_steps: int = 1_000,
-    learning_rate: float | dict[str, float] = 1e-1,
+    learning_rate: ScalarOrScheduleOrSpec | dict[str, ScalarOrScheduleOrSpec] = 1e-1,
     rng=None,
     loss: ELBO = Trace_ELBO(),
     nan_policy="exit",
@@ -149,24 +150,7 @@ def svi(
         else:
             raise ValueError(f"Inconsistent {callbacks=} and {callback_teardown=}")
 
-    if isinstance(learning_rate, dict):
-        logger.info("Recieved learning_rate={}", learning_rate)
-        if "default" not in learning_rate:
-            logger.warning(
-                "When learning_rate dict does not contain 'default' key, "
-                "it must contain ALL parameter names explicitly"
-            )
-            # TODO: trace the guide and compare the parameters to the specified
-            # dictionary more intelligently and completely
-        label_fn = flattened_traversal(
-            lambda path, _: path[0] if path[0] in learning_rate else "default"
-        )
-        opt = optax.multi_transform(
-            {k: optax.adabelief(v) for k, v in learning_rate.items()},
-            label_fn,
-        )
-    else:
-        opt = Adam(learning_rate)
+    opt = generate_optimiser(learning_rate)
 
     return run_with_callbacks(
         SVI(model, guide or AutoDelta(model), opt, loss),
