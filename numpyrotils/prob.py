@@ -124,31 +124,27 @@ def svi(
     Additionally, orchestrates Weights and Biases callbacks for convenience.
     """
     if wandb_proj or (wandb_proj := os.getenv("WANDB_PROJECT")):
-        if callbacks and callback_teardown:
-            raise NotImplementedError(
-                "Passing wandb_proj and callbacks simultaneously is not supported yet. "
-                "Call wandb.init() externally"
-            )
-        elif not callbacks and not callback_teardown:
-            try:
-                import wandb
-            except ImportError as err:
-                raise ImportError("wandb_project specified but no wandb found") from err
+        try:
+            import wandb
+        except ImportError as err:
+            raise ImportError("wandb_project specified but no wandb found") from err
 
-            from numpyrotils._wandb import wandb_callback, wandb_teardown
+        from numpyrotils._wandb import wandb_callback, wandb_teardown
 
-            wandb.init(
-                project=wandb_proj,
-                config={
-                    "learning_rate": learning_rate,
-                    "num_steps": num_steps,
-                    "guide": str(guide),
-                },
-            )
-            callbacks = [(max(1, int(num_steps % 100)), wandb_callback)]
+        if not callback_teardown:
             callback_teardown = [wandb_teardown]
-        else:
-            raise ValueError(f"Inconsistent {callbacks=} and {callback_teardown=}")
+        if not callbacks:
+            callbacks = [(max(1, int(num_steps % 100)), wandb_callback)]
+
+        wandb.init(
+            project=wandb_proj,
+            config={
+                "learning_rate": learning_rate,
+                "num_steps": num_steps,
+                "guide": str(guide),
+            },
+            dir="./.wandb",  # default ./wandb confuses LSP's import resolution
+        )
 
     opt = generate_optimiser(learning_rate)
 
