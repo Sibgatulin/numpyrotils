@@ -1,19 +1,22 @@
 import os
 from collections.abc import Callable
+from functools import partial
 from typing import Literal
 
 import jax.numpy as jnp
 import optax
 from jax import jit, random, tree_util
+from jaxtyping import Array, Bool
 from loguru import logger
 from numpyro.infer import ELBO, SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoDelta
 from numpyro.infer.svi import SVIRunResult
 from numpyro.optim import Adam
 from tqdm import trange
-from numpyrotils.optimiser import generate_optimiser, ScalarOrScheduleOrSpec
 
-__all__ = ["run_with_callbacks", "svi"]
+from numpyrotils.optimiser import ScalarOrScheduleOrSpec, generate_optimiser
+
+__all__ = ["run_with_callbacks", "run_svi"]
 
 NAN_POLICY = Literal["exit", "propagate", "stable_update"]
 
@@ -76,7 +79,11 @@ def run_with_callbacks(
 
     for i in trange(num_steps):
         _state, loss = body_fn(state)
-        if jnp.isfinite(loss) or nan_policy == "propagate":
+        if (
+            jnp.isfinite(loss)
+            and state_is_fully_finite(svi, state).item()
+            or nan_policy == "propagate"
+        ):
             state = _state
             _losses.append(loss)
         else:
@@ -95,6 +102,14 @@ def run_with_callbacks(
     return SVIRunResult(svi.get_params(state), state, jnp.stack(_losses))
 
 
+@partial(jit, static_argnames=["svi"])
+def state_is_fully_finite(svi, svi_state) -> Bool[Array, ""]:
+    return tree_util.tree_reduce(
+        lambda x, y: x * y,
+        tree_util.tree_map(lambda x: jnp.isfinite(x).all(), svi.get_params(svi_state)),
+    )
+
+
 def flattened_traversal(fn):
     from flax import traverse_util
 
@@ -105,7 +120,7 @@ def flattened_traversal(fn):
     return mask
 
 
-def svi(
+def run_svi(
     model,
     guide=None,
     num_steps: int = 1_000,
@@ -117,7 +132,7 @@ def svi(
     callback_teardown: list[Callable] = [],
     wandb_proj=None,
     **model_kws,
-) -> SVIRunResult:
+) -> tuple[SVIRunResult, SVI]:
     """Convenience function to init and run SVI.
 
     Offers a convenience to set up different learning rate for different parameters.
@@ -148,12 +163,16 @@ def svi(
 
     opt = generate_optimiser(learning_rate)
 
-    return run_with_callbacks(
-        SVI(model, guide or AutoDelta(model), opt, loss),
-        rng or random.PRNGKey(0),
-        num_steps=num_steps,
-        nan_policy=nan_policy,
-        callbacks=callbacks,
-        callback_teardown=callback_teardown,
-        **model_kws,
+    svi = SVI(model, guide or AutoDelta(model), opt, loss)
+    return (
+        run_with_callbacks(
+            svi,
+            rng or random.PRNGKey(0),
+            num_steps=num_steps,
+            nan_policy=nan_policy,
+            callbacks=callbacks,
+            callback_teardown=callback_teardown,
+            **model_kws,
+        ),
+        svi,
     )
