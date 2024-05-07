@@ -81,7 +81,7 @@ def run_with_callbacks(
         _state, loss = body_fn(state)
         if (
             jnp.isfinite(loss)
-            and state_is_fully_finite(svi, state).item()
+            and state_is_fully_finite(svi, _state).item()
             or nan_policy == "propagate"
         ):
             state = _state
