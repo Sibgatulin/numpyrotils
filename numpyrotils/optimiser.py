@@ -48,7 +48,8 @@ def schedule_if_specs(
 
 
 def generate_optimiser(
-    learning_rate: ScalarOrScheduleOrSpec | dict[str, ScalarOrScheduleOrSpec]
+    learning_rate: ScalarOrScheduleOrSpec | dict[str, ScalarOrScheduleOrSpec],
+    opt_cls: optax.GradientTransformation = optax.adabelief,
 ):
     learning_rate = schedule_if_specs(learning_rate)
     if isinstance(learning_rate, dict):
@@ -64,7 +65,7 @@ def generate_optimiser(
             lambda path, _: path[0] if path[0] in learning_rate else "default"
         )
         return optax.multi_transform(
-            {k: optax.adabelief(v) for k, v in learning_rate.items()},
+            {k: opt_cls(v) for k, v in learning_rate.items()},
             label_fn,
         )
-    return optax.adabelief(learning_rate)
+    return opt_cls(learning_rate)
