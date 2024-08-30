@@ -8,9 +8,9 @@ def clean_up_param_name(name: str) -> str:
     return re.sub(r"^p_", "", name).replace("_auto", "")
 
 
-def prepare_to_log(svi, state) -> dict:
+def prepare_to_log(values: dict) -> dict:
     artifacts = {}
-    for k, v in svi.get_params(state).items():
+    for k, v in values.items():
         if jnp.size(v) == 1:
             artifacts[clean_up_param_name(k)] = v
         elif jnp.ndim(v) == 1:
@@ -21,7 +21,7 @@ def prepare_to_log(svi, state) -> dict:
 
 
 def wandb_callback(svi, state, loss):
-    wandb.log({"loss": loss} | prepare_to_log(svi, state))
+    wandb.log({"loss": loss} | prepare_to_log(svi.get_params(state)))
 
 
 def wandb_teardown(*_):
