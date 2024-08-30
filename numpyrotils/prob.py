@@ -1,17 +1,16 @@
 import os
+from collections import defaultdict
 from collections.abc import Callable
-from functools import partial
-from typing import Literal
+from typing import Literal, overload
 
 import jax.numpy as jnp
 import optax
-from jax import jit, random, tree_util
-from jaxtyping import Array, Bool
+from jax import jit, pure_callback, random, tree_util
+from jaxtyping import Array, ArrayLike, Bool
 from loguru import logger
 from numpyro.infer import ELBO, SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoDelta
 from numpyro.infer.svi import SVIRunResult
-from numpyro.optim import Adam
 from tqdm import trange
 
 from numpyrotils.optimiser import ScalarOrScheduleOrSpec, generate_optimiser
@@ -120,6 +119,66 @@ def flattened_traversal(fn):
     return mask
 
 
+@overload
+def hook_optax(
+    optimizer: optax.GradientTransformation,
+    append: Literal[True],
+    estimator: Callable[[ArrayLike, tuple[int, ...]], ArrayLike] = jnp.mean,
+) -> tuple[optax.GradientTransformation, defaultdict]: ...
+
+
+@overload
+def hook_optax(
+    optimizer: optax.GradientTransformation,
+    append: Literal[False],
+    estimator: Callable[[ArrayLike, tuple[int, ...]], ArrayLike] = jnp.mean,
+) -> tuple[optax.GradientTransformation, dict]: ...
+
+
+def hook_optax(
+    optimizer: optax.GradientTransformation,
+    append=False,
+    estimator: Callable[[ArrayLike, tuple[int, ...]], ArrayLike] = jnp.mean,
+) -> tuple[optax.GradientTransformation, dict | defaultdict]:
+    """Generate optimizer that stores gradient estimates.
+
+    Parameters
+    ----------
+    optimizer : optax gradient tranformation
+    estimator : callable[[ArrayLike, tuple[int,...]], float]
+        By default: jnp.mean, can be any other function, that is able to aggregate
+        a jax array along specified `axis` (that can be a tuple), e.g. jnp.linalg.norm
+    append : bool
+        if True, all gradient estimates will be preserved in a defaultdict,
+        else only the latest will be stored in a dict
+    """
+    if append:
+        grad_store = defaultdict(list)
+    else:
+        grad_store = {}
+
+    def agg_fn(array, fn=jnp.mean, max_allowed_dim_size=5):
+        agg_axes = tuple(
+            idx for idx, sz in enumerate(array.shape) if sz > max_allowed_dim_size
+        )
+        return fn(array, axis=agg_axes)
+
+    def push_grad(grad):
+        for name, g in grad.items():
+            val = agg_fn(g, fn=estimator)
+            if append:
+                grad_store[f"∇{name}"].append(val)
+            else:
+                grad_store[f"∇{name}"] = val
+        return grad
+
+    def update_fn(grads, state, params=None):
+        grads = pure_callback(push_grad, grads, grads)
+        return optimizer.update(grads, state, params=params)
+
+    return optax.GradientTransformation(optimizer.init, update_fn), grad_store
+
+
 def run_svi(
     model,
     guide=None,
@@ -138,6 +197,10 @@ def run_svi(
     Offers a convenience to set up different learning rate for different parameters.
     Additionally, orchestrates Weights and Biases callbacks for convenience.
     """
+
+    opt = generate_optimiser(learning_rate)
+    opt, grad_store = hook_optax(opt, append=False)
+
     if wandb_proj or (wandb_proj := os.getenv("WANDB_PROJECT")):
         try:
             import wandb
@@ -149,7 +212,12 @@ def run_svi(
         if not callback_teardown:
             callback_teardown = [wandb_teardown]
         if not callbacks:
-            callbacks = [(max(1, int(num_steps % 100)), wandb_callback)]
+            callbacks = [
+                (
+                    max(1, int(num_steps % 100)),
+                    lambda *args: wandb_callback(*args, payload=grad_store),
+                )
+            ]
 
         wandb.init(
             project=wandb_proj,
@@ -160,8 +228,6 @@ def run_svi(
             },
             dir="./.wandb",  # default ./wandb confuses LSP's import resolution
         )
-
-    opt = generate_optimiser(learning_rate)
 
     svi = SVI(model, guide or AutoDelta(model), opt, loss)
     return (
