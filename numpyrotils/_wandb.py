@@ -1,7 +1,11 @@
+import re
+
 import jax.numpy as jnp
 import wandb
 
-from prob_mri.utils.prob import clean_up_param_name
+
+def clean_up_param_name(name: str) -> str:
+    return re.sub(r"^p_", "", name).replace("_auto", "")
 
 
 def prepare_to_log(svi, state) -> dict:
