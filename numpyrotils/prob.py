@@ -5,9 +5,11 @@ from typing import Literal, overload
 
 import jax.numpy as jnp
 import optax
-from jax import jit, pure_callback, random, tree_util
+from jax import jit, lax, pure_callback, random, tree_util
+from jax.scipy.special import i0e
 from jaxtyping import Array, ArrayLike, Bool
-from loguru import logger
+from numpyro.distributions import Distribution, constraints
+from numpyro.distributions.util import is_prng_key, promote_shapes, validate_sample
 from numpyro.infer import ELBO, SVI, Trace_ELBO
 from numpyro.infer.autoguide import AutoDelta
 from numpyro.infer.svi import SVIRunResult
@@ -15,7 +17,7 @@ from tqdm import trange
 
 from numpyrotils.optimiser import ScalarOrScheduleOrSpec, generate_optimiser
 
-__all__ = ["run_with_callbacks", "run_svi"]
+__all__ = ["run_with_callbacks", "run_svi", "Ricean"]
 
 NAN_POLICY = Literal["exit", "propagate", "stable_update"]
 
@@ -242,3 +244,38 @@ def run_svi(
         ),
         svi,
     )
+
+
+class Ricean(Distribution):
+    arg_constraints = {"loc": constraints.positive, "scale": constraints.positive}
+    support = constraints.positive
+    reparametrized_params = ["loc", "scale"]
+
+    def __init__(self, loc=1.25, scale=1.0, *, validate_args=None):
+        self.loc, self.scale = promote_shapes(loc, scale)
+        batch_shape = lax.broadcast_shapes(jnp.shape(loc), jnp.shape(scale))
+        super().__init__(batch_shape=batch_shape, validate_args=validate_args)
+
+    def sample(self, key, sample_shape=()):
+        assert is_prng_key(key)
+        eps = random.normal(
+            key, shape=(2,) + sample_shape + self.batch_shape + self.event_shape
+        )
+        return jnp.linalg.norm(self.loc / 2**0.5 + eps * self.scale, axis=0)
+
+    @validate_sample
+    def log_prob(self, value):
+        # Adopted from scipy.stats.rice
+        # rice.pdf(x, b) = x * exp(-(x**2+b**2)/2) * I[0](x*b)
+        #
+        # We use (x**2 + b**2)/2 = ((x-b)**2)/2 + xb.
+        # The factor of np.exp(-xb) is then included in the i0e function
+        # in place of the modified Bessel function, i0, improving
+        # numerical stability for large values of xb.
+        s2 = self.scale**2
+        return (
+            jnp.log(value)
+            - jnp.log(s2)
+            - 0.5 * (value - self.loc) ** 2 / s2
+            + jnp.log(i0e(value * self.loc / s2))
+        )
