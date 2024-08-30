@@ -20,8 +20,8 @@ def prepare_to_log(values: dict) -> dict:
     return artifacts
 
 
-def wandb_callback(svi, state, loss):
-    wandb.log({"loss": loss} | prepare_to_log(svi.get_params(state)))
+def wandb_callback(svi, state, loss, payload={}):
+    wandb.log({"loss": loss} | prepare_to_log(svi.get_params(state) | payload))
 
 
 def wandb_teardown(*_):
