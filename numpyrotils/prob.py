@@ -103,12 +103,16 @@ def run_with_callbacks(
     return SVIRunResult(svi.get_params(state), state, jnp.stack(_losses))
 
 
-@partial(jit, static_argnames=["svi"])
-def state_is_fully_finite(svi, svi_state) -> Bool[Array, ""]:
+@jit
+def tree_is_finite(tree):
     return tree_util.tree_reduce(
         lambda x, y: x * y,
-        tree_util.tree_map(lambda x: jnp.isfinite(x).all(), svi.get_params(svi_state)),
+        tree_util.tree_map(lambda x: jnp.isfinite(x).all(), tree),
     )
+
+
+def state_is_fully_finite(svi, svi_state) -> Bool[Array, ""]:
+    return tree_is_finite(svi.get_params(svi_state))
 
 
 def flattened_traversal(fn):
