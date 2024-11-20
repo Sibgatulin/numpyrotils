@@ -1,6 +1,7 @@
 import os
 from collections import defaultdict
 from collections.abc import Callable
+from pprint import pprint
 from typing import Literal, overload
 
 import jax.numpy as jnp
@@ -22,12 +23,12 @@ __all__ = ["run_with_callbacks", "run_svi", "Ricean"]
 NAN_POLICY = Literal["exit", "propagate", "stable_update"]
 
 
-def percentage_of_nans_in_tree(tree):
+def frac_of_nans_in_tree(tree):
     """Used to calculate the percentage of NaN in the variational parameters.
 
     Helpful to identify the culprits when SVI stumbles over NaNs.
     """
-    return tree_util.tree_map(lambda x: (jnp.isnan(x).mean() * 100).round(), tree)
+    return tree_util.tree_map(lambda x: jnp.isnan(x).mean(), tree)
 
 
 def run_with_callbacks(
@@ -88,9 +89,17 @@ def run_with_callbacks(
             state = _state
             _losses.append(loss)
         else:
-            print(f"Loss became NaN at iter={i}. Proportion of NaNs found:")
-            for k, v in svi.get_params(_state).items():
-                print(f"{k}: {percentage_of_nans_in_tree(v)}%")
+            print(f"Loss became NaN at iter={i}")
+            nan_fracs = {
+                k: frac_of_nans_in_tree(v) for k, v in svi.get_params(_state).items()
+            }
+            nan_fracs = {k: v for k, v in nan_fracs.items() if v > 0}
+            if nan_fracs:
+                print("Proportion of NaNs found:")
+                for k, v in nan_fracs.items():
+                    print(f"{k}: {v:.1%}")
+            else:
+                pprint(svi.get_params(_state))
             print("Keeping the last iteration with finite loss")
             break
 

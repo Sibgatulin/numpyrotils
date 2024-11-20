@@ -5,7 +5,7 @@ import wandb
 
 
 def clean_up_param_name(name: str) -> str:
-    return re.sub(r"^p_", "", name).replace("_auto", "")
+    return re.sub(r"^(∇)?p_", lambda m: m.groups()[0] or "", name).replace("_auto", "")
 
 
 def prepare_to_log(values: dict) -> dict:
@@ -17,6 +17,8 @@ def prepare_to_log(values: dict) -> dict:
             artifacts[clean_up_param_name(k)] = dict(enumerate(v.tolist()))
         elif jnp.ndim(v) > 1 and jnp.size(v) < 20:
             artifacts[clean_up_param_name(k)] = dict(enumerate(v.flatten().tolist()))
+        else:
+            artifacts[clean_up_param_name(k)] = jnp.linalg.norm(v).item()
     return artifacts
 
 
