@@ -18,7 +18,6 @@ def prepare_to_log(values: dict) -> dict:
         elif jnp.ndim(v) > 1 and jnp.size(v) < 20:
             artifacts[clean_up_param_name(k)] = dict(enumerate(v.flatten().tolist()))
         else:
-            artifacts[f"||{clean_up_param_name(k)}||_2"] = jnp.linalg.norm(v).item()
             artifacts[f"⟨{clean_up_param_name(k)}⟩"] = jnp.mean(v).item()
     return artifacts
 
