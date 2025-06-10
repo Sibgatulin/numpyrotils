@@ -205,6 +205,7 @@ def run_svi(
     callbacks: list[tuple[int, Callable]] = [],
     callback_teardown: list[Callable] = [],
     wandb_proj=None,
+    store_grads=True,
     **model_kws,
 ) -> tuple[SVIRunResult, SVI]:
     """Convenience function to init and run SVI.
@@ -214,7 +215,10 @@ def run_svi(
     """
 
     opt = generate_optimiser(learning_rate)
-    opt, grad_store = hook_optax(opt, append=False)
+    if store_grads:
+        opt, grad_store = hook_optax(opt, append=False)
+    else:
+        grad_store = {}
 
     if wandb_proj or (wandb_proj := os.getenv("WANDB_PROJECT")):
         try:
