@@ -248,7 +248,7 @@ def run_svi(
     return (
         run_with_callbacks(
             svi,
-            rng or random.PRNGKey(0),
+            random.PRNGKey(0) if rng is None else rng,
             num_steps=num_steps,
             nan_policy=nan_policy,
             callbacks=callbacks,
