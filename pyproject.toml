@@ -10,7 +10,7 @@ dynamic = ["version"]
 description = "A collection of utils for numpyro"
 authors = [{ name = "Renat Sibgatulin", email = "sibgatulin@tuta.io" }]
 requires-python = ">=3.9"
-dependencies = ["flax", "funsor", "numpyro", "optax", "tqdm"]
+dependencies = ["flax", "loguru", "numpyro", "optax", "tqdm"]
 classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
@@ -23,6 +23,7 @@ classifiers = [
 
 [project.optional-dependencies]
 wandb = ["wandb"]
+test = ["pytest", "arviz"]
 
 [tool.setuptools]
 packages = ["numpyrotils"]

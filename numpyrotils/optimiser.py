@@ -6,6 +6,15 @@ from flax import traverse_util
 from loguru import logger
 from jax.tree_util import tree_map
 
+__all__ = [
+    "CycledScheduleSpec",
+    "ScalarOrScheduleOrSpec",
+    "generate_optimiser",
+    "generate_cycled_schedule",
+    "schedule_if_spec",
+    "schedule_if_specs",
+]
+
 CycledScheduleSpec = namedtuple("ScheduleSpec", ["start", "end", "ncycle", "ntotal"])
 ScalarOrScheduleOrSpec = CycledScheduleSpec | optax.ScalarOrSchedule
 
@@ -53,7 +62,7 @@ def generate_optimiser(
 ):
     learning_rate = schedule_if_specs(learning_rate)
     if isinstance(learning_rate, dict):
-        logger.info("Recieved learning_rate={}", learning_rate)
+        logger.info("Received learning_rate={}", learning_rate)
         if "default" not in learning_rate:
             logger.warning(
                 "When learning_rate dict does not contain 'default' key, "
