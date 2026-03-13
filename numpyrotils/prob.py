@@ -1,4 +1,5 @@
 import os
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from pprint import pprint
@@ -19,7 +20,7 @@ from tqdm import trange
 
 from numpyrotils.optimiser import ScalarOrScheduleOrSpec, generate_optimiser
 
-__all__ = ["run_with_callbacks", "run_svi", "Ricean"]
+__all__ = ["run_with_callbacks", "run_svi", "Ricean", "compute_importance_weights"]
 
 NAN_POLICY = Literal["exit", "propagate", "stable_update"]
 
@@ -36,9 +37,9 @@ def run_with_callbacks(
     svi,
     rng_key,
     num_steps,
-    nan_policy="exit",
-    callbacks: list[tuple[int, Callable]] = [],
-    callback_teardown: list[Callable] = [],
+    nan_policy: NAN_POLICY = "exit",
+    callbacks: list[tuple[int, Callable]] | None = None,
+    callback_teardown: list[Callable] | None = None,
     **kwargs,
 ) -> SVIRunResult:
     """
@@ -66,6 +67,8 @@ def run_with_callbacks(
         apparent for me from the documentation, nor seem to help to recover from NaNs
         in my experience)
     """
+    callbacks = callbacks or []
+    callback_teardown = callback_teardown or []
     print(f"Provided {len(callbacks)} callbacks and {len(callback_teardown)} teardowns")
     _losses = []
 
@@ -83,9 +86,9 @@ def run_with_callbacks(
     for i in trange(num_steps):
         _state, loss = body_fn(state)
         if (
-            jnp.isfinite(loss)
+            nan_policy == "propagate"
+            or jnp.isfinite(loss)
             and state_is_fully_finite(svi, _state).item()
-            or nan_policy == "propagate"
         ):
             state = _state
             _losses.append(loss)
@@ -116,23 +119,13 @@ def run_with_callbacks(
 @jit
 def tree_is_finite(tree):
     return tree_util.tree_reduce(
-        lambda x, y: x * y,
+        jnp.logical_and,
         tree_util.tree_map(lambda x: jnp.isfinite(x).all(), tree),
     )
 
 
 def state_is_fully_finite(svi, svi_state) -> Bool[Array, ""]:
     return tree_is_finite(svi.get_params(svi_state))
-
-
-def flattened_traversal(fn):
-    from flax import traverse_util
-
-    def mask(tree):
-        flat = traverse_util.flatten_dict(tree)
-        return traverse_util.unflatten_dict({k: fn(k, v) for k, v in flat.items()})
-
-    return mask
 
 
 @overload
@@ -202,9 +195,9 @@ def run_svi(
     learning_rate: ScalarOrScheduleOrSpec | dict[str, ScalarOrScheduleOrSpec] = 1e-1,
     rng=None,
     loss: ELBO = Trace_ELBO(),
-    nan_policy="exit",
-    callbacks: list[tuple[int, Callable]] = [],
-    callback_teardown: list[Callable] = [],
+    nan_policy: NAN_POLICY = "exit",
+    callbacks: list[tuple[int, Callable]] | None = None,
+    callback_teardown: list[Callable] | None = None,
     wandb_proj=None,
     store_grads=True,
     **model_kws,
@@ -214,6 +207,12 @@ def run_svi(
     Offers a convenience to set up different learning rate for different parameters.
     Additionally, orchestrates Weights and Biases callbacks for convenience.
     """
+    callbacks = list(callbacks) if callbacks else []
+    callback_teardown = list(callback_teardown) if callback_teardown else []
+
+    if rng is None:
+        warnings.warn("No rng key provided, using PRNGKey(0).", stacklevel=2)
+        rng = random.PRNGKey(0)
 
     opt = generate_optimiser(learning_rate)
     if store_grads:
@@ -234,7 +233,7 @@ def run_svi(
         if not callbacks:
             callbacks = [
                 (
-                    max(1, int(num_steps % 100)),
+                    max(1, int(num_steps // 100)),
                     lambda *args: wandb_callback(*args, payload=grad_store),
                 )
             ]
@@ -253,7 +252,7 @@ def run_svi(
     return (
         run_with_callbacks(
             svi,
-            random.PRNGKey(0) if rng is None else rng,
+            rng,
             num_steps=num_steps,
             nan_policy=nan_policy,
             callbacks=callbacks,
@@ -354,3 +353,119 @@ def compute_importance_weights(
         in_axes=0,  # map over samples
     )(samples)
     return log_density_model - log_density_guide
+
+
+# def _gpdfit(ary: jnp.ndarray) -> tuple:
+#     """Estimate the GPD shape (k) and scale (sigma) parameters."""
+#     prior_bs = 3.0
+#     prior_k = 10.0
+#     n = ary.shape[0]
+#     m_est = 30 + int(np.sqrt(n))
+
+#     # build b_ary
+#     i = jnp.arange(1, m_est + 1, dtype=float)
+#     b_ary = 1 - jnp.sqrt(m_est / (i - 0.5))
+#     b_ary = b_ary / (prior_bs * ary[jnp.floor(n / 4 + 0.5).astype(int) - 1])
+#     b_ary = b_ary + 1 / ary[-1]
+
+#     # compute k_ary
+#     # b_ary[:, None] * ary -> broadcast shape (m_est, n)
+#     k_ary = jnp.log1p(-b_ary[:, None] * ary).mean(axis=1)
+#     len_scale = n * (jnp.log(-(b_ary / k_ary)) - k_ary - 1)
+#     # weights
+#     weights = jnp.exp(-(len_scale - len_scale[:, None]))
+#     weights = weights.sum(axis=1)
+#     weights = 1 / weights
+
+#     # prune near-zero weights
+#     eps = jnp.finfo(float).eps
+#     mask = weights >= 10 * eps
+#     weights = weights[mask]
+#     b_ary = b_ary[mask]
+
+#     # normalize
+#     weights = weights / jnp.sum(weights)
+
+#     # posterior mean for b
+#     b_post = jnp.sum(b_ary * weights)
+#     k_post = jnp.log1p(-b_post * ary).mean()
+#     sigma = -k_post / b_post
+#     k_post = (n * k_post + prior_k * 0.5) / (n + prior_k)
+#     return k_post, sigma
+
+
+# def _gpinv(probs: jnp.ndarray, kappa: float, sigma: float) -> jnp.ndarray:
+#     """Inverse CDF of the Generalized Pareto distribution."""
+#     x = jnp.full_like(probs, jnp.nan)
+#     if sigma <= 0:
+#         return x
+#     # valid slice
+#     ok = (probs > 0) & (probs < 1)
+
+#     def _compute(val):
+#         p = val
+#         return lax.cond(
+#             jnp.abs(kappa) < jnp.finfo(float).eps,
+#             lambda pr: -jnp.log1p(-pr),
+#             lambda pr: jnp.expm1(-kappa * jnp.log1p(-pr)) / kappa,
+#             p,
+#         )
+#     # compute for ok
+#     x = x.at[ok].set(_compute(probs[ok]) * sigma)
+#     # handle boundaries
+#     x = x.at[probs == 0].set(0.0)
+#     x = x.at[probs == 1].set(jnp.where(kappa >= 0, jnp.inf, -sigma / kappa))
+#     return x
+
+
+# def _psislw(log_weights: jnp.ndarray,
+#             cutoff_ind: int,
+#             cutoffmin: float = -jnp.inf,
+#             normalize: bool = True) -> tuple:
+#     """Pareto smoothed importance sampling for 1D log-weights."""
+#     x = log_weights.astype(float)
+#     max_x = jnp.max(x)
+#     x = x - max_x
+
+#     # sort
+#     ind = jnp.argsort(x)
+#     # cutoff
+#     xcutoff = jnp.maximum(x[ind[cutoff_ind]], cutoffmin)
+#     exp_xcut = jnp.exp(xcutoff)
+
+#     tail_mask = x > xcutoff
+#     tailinds = jnp.where(tail_mask)[0]
+#     tail_len = tailinds.shape[0]
+
+#     def no_smooth():
+#         return jnp.inf, x
+
+#     def do_smooth():
+#         x_tail = x[tailinds]
+#         si = jnp.argsort(x_tail)
+#         # fit
+#         k, sigma = _gpdfit(jnp.exp(x_tail) - exp_xcut)
+#         def smooth_branch(args):
+#             k_val, sigma_val = args
+#             # ordered probs
+#             sti = jnp.arange(0.5, tail_len) / tail_len
+#             st = _gpinv(sti, k_val, sigma_val)
+#             st = jnp.log(st + exp_xcut)
+#             # insert
+#             x_new = x.at[tailinds[si]].set(st)
+#             x_new = jnp.where(x_new > 0, 0.0, x_new)
+#             return k_val, x_new
+# n
+#         return lax.cond(jnp.isfinite(k), smooth_branch, lambda _: (k, x), (k, sigma))
+
+#     k, x = lax.cond(tail_len <= 4, lambda: no_smooth(), do_smooth, operand=None)
+
+#     # renormalize or re-add max
+#     if normalize:
+#         # logsumexp
+#         mx = jnp.max(x)
+#         lse = mx + jnp.log(jnp.sum(jnp.exp(x - mx)))
+#         x = x - lse
+#     else:
+#         x = x + max_x
+#     return x, k
